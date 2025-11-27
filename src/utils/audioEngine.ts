@@ -5,6 +5,8 @@ class AudioEngine {
   private piano: Tone.Sampler | null = null;
   private initialized: boolean = false;
   private loadingPromise: Promise<void> | null = null;
+  private timeouts: ReturnType<typeof setTimeout>[] = []; // Track scheduled timeouts
+  private currentPlayId: number = 0; // Generation ID to handle race conditions
 
   // 构建采样映射对象
   // 使用已有的采样文件，对于没有直接采样的音符，Sampler 会自动通过改变播放速度生成
@@ -78,8 +80,12 @@ class AudioEngine {
 
   // Play a single note
   async playNote(note: string, octave: number, duration: number = 1.0) {
+    this.currentPlayId++;
+    const playId = this.currentPlayId;
+    this.stop(); // Clear previous sounds
+
     await this.initialize();
-    if (!this.piano) return;
+    if (!this.piano || playId !== this.currentPlayId) return;
 
     const noteName = this.formatNote(note, octave);
     this.piano.triggerAttackRelease(noteName, duration);
@@ -87,8 +93,12 @@ class AudioEngine {
 
   // Play multiple notes (chord or interval)
   async playNotes(notes: { note: string; octave: number }[], mode: PlayMode, duration: number = 1.0) {
+    this.currentPlayId++;
+    const playId = this.currentPlayId;
+    this.stop(); // Clear previous sounds
+
     await this.initialize();
-    if (!this.piano) return;
+    if (!this.piano || playId !== this.currentPlayId) return;
 
     if (mode === 'harmonic') {
       // 同时播放所有音符（和弦）
@@ -98,44 +108,58 @@ class AudioEngine {
       // 依次播放音符（上行）
       notes.forEach(({ note, octave }, index) => {
         const noteName = this.formatNote(note, octave);
-        setTimeout(() => {
-          if (this.piano) {
+        const timeoutId = setTimeout(() => {
+          if (this.piano && playId === this.currentPlayId) {
             this.piano.triggerAttackRelease(noteName, duration * 0.6);
           }
         }, index * 400);
+        this.timeouts.push(timeoutId);
       });
     } else if (mode === 'descending') {
       // 依次播放音符（下行）
       [...notes].reverse().forEach(({ note, octave }, index) => {
         const noteName = this.formatNote(note, octave);
-        setTimeout(() => {
-          if (this.piano) {
+        const timeoutId = setTimeout(() => {
+          if (this.piano && playId === this.currentPlayId) {
             this.piano.triggerAttackRelease(noteName, duration * 0.6);
           }
         }, index * 400);
+        this.timeouts.push(timeoutId);
       });
     }
   }
 
   // Play a scale
   async playScale(notes: { note: string; octave: number }[], ascending: boolean = true) {
+    this.currentPlayId++;
+    const playId = this.currentPlayId;
+    this.stop(); // Clear previous sounds
+
     await this.initialize();
-    if (!this.piano) return;
+    if (!this.piano || playId !== this.currentPlayId) return;
     
     const notesToPlay = ascending ? notes : [...notes].reverse();
     
     notesToPlay.forEach(({ note, octave }, index) => {
       const noteName = this.formatNote(note, octave);
-      setTimeout(() => {
-        if (this.piano) {
+      const timeoutId = setTimeout(() => {
+        if (this.piano && playId === this.currentPlayId) {
           this.piano.triggerAttackRelease(noteName, 0.5);
         }
       }, index * 300);
+      this.timeouts.push(timeoutId);
     });
+  }
+
+  // Clear all scheduled timeouts
+  private clearSchedule() {
+    this.timeouts.forEach(id => clearTimeout(id));
+    this.timeouts = [];
   }
 
   // Stop all sounds
   stop() {
+    this.clearSchedule();
     if (this.piano) {
       this.piano.releaseAll();
     }
@@ -143,6 +167,7 @@ class AudioEngine {
 
   // 清理资源
   dispose() {
+    this.clearSchedule();
     if (this.piano) {
       this.piano.dispose();
       this.piano = null;
